@@ -1,0 +1,55 @@
+{
+  "name": "big-table-csv-viewer",
+  "displayName": "BigTable CSV Viewer",
+  "description": "High-performance, ultra-lightweight viewer and filter for millions of rows CSV files.",
+  "version": "0.1.0",
+  "publisher": "pram",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "bigTable.csvViewer",
+        "displayName": "BigTable CSV Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.csv"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bigTable.openCsv",
+        "title": "Open with BigTable CSV Viewer"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "bigTable.openCsv",
+          "when": "resourceExtname == .csv",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0"
+  }
+}
