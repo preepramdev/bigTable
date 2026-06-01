@@ -666,6 +666,10 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         <option value="shift-jis">Shift-JIS (Japanese)</option>
         <option value="gb18030">GB18030 (Chinese)</option>
       </select>
+      <div id="sort-badge" class="columns-badge hidden" style="background-color: rgba(14, 99, 156, 0.15); border-color: var(--accent);">
+        <span id="sort-text">Sorted by: --</span>
+        <button class="btn btn-secondary" onclick="clearSortFromBadge()" title="Clear Sorting" style="padding: 1px 5px; line-height: 1; font-size: 11px; margin-left: 4px; background: transparent; border: none; cursor: pointer;">&times;</button>
+      </div>
       <div id="columns-badge" class="columns-badge hidden">
         <span id="columns-count">Columns: --</span>
         <button id="btn-reset-cols" class="btn btn-secondary hidden" onclick="resetColumns()">Show All</button>
@@ -761,6 +765,8 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     const btnToggleFilter = document.getElementById('btn-toggle-filter');
     const contextMenu = document.getElementById('context-menu');
     let contextMenuColIndex = null;
+    const sortBadge = document.getElementById('sort-badge');
+    const sortText = document.getElementById('sort-text');
 
     // Trigger Initial State Request
     vscode.postMessage({ type: 'ready', pageSize: pageSize });
@@ -973,6 +979,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
 
       showLoading('Sorting column...');
       setTimeout(() => {
+        updateSortBadge();
         if (sortColIndex !== null) {
           sortData(sortColIndex, sortDirection);
         } else {
@@ -1193,6 +1200,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
 
     function applySort() {
       showLoading('Sorting column...');
+      updateSortBadge();
       setTimeout(() => {
         sortData(sortColIndex, sortDirection);
         renderHeaders();
@@ -1203,9 +1211,25 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
 
     function restoreOriginalOrder() {
       showLoading('Restoring original table order...');
+      updateSortBadge();
       setTimeout(() => {
         vscode.postMessage({ type: 'ready', pageSize: loadedRows.length });
       }, 50);
+    }
+
+    function updateSortBadge() {
+      if (sortColIndex !== null && headers[sortColIndex]) {
+        sortText.textContent = \`Sorted: \${headers[sortColIndex]} (\${sortDirection === 'asc' ? '▲' : '▼'})\`;
+        sortBadge.classList.remove('hidden');
+      } else {
+        sortBadge.classList.add('hidden');
+      }
+    }
+
+    function clearSortFromBadge() {
+      sortColIndex = null;
+      sortDirection = null;
+      restoreOriginalOrder();
     }
 
     window.addEventListener('click', () => {
