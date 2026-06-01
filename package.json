@@ -3,10 +3,10 @@
   "displayName": "BigTable CSV Viewer",
   "description": "High-performance, ultra-lightweight viewer and filter for millions of rows CSV files.",
   "version": "0.1.0",
-  "publisher": "pram",
+  "publisher": "preepramdev",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pram/big-table-csv-viewer.git"
+    "url": "https://github.com/preepramdev/big-table-csv-viewer.git"
   },
   "engines": {
     "vscode": "^1.75.0"
