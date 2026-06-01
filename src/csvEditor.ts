@@ -603,6 +603,35 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
       color: var(--vscode-inputValidation-errorBorder, #be1111);
       opacity: 1;
     }
+
+    /* Custom Context Menu Styles */
+    .context-menu {
+      position: absolute;
+      background-color: var(--header-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      padding: 4px 0;
+      min-width: 160px;
+    }
+
+    .context-menu-item {
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--fg);
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .context-menu-item:hover {
+      background-color: var(--hover-bg);
+    }
   </style>
 </head>
 <body>
@@ -675,6 +704,21 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     </div>
   </div>
 
+  <div id="context-menu" class="context-menu hidden">
+    <div class="context-menu-item" onclick="handleContextMenuAction('sort-asc')">
+      <span>▲</span> Sort Ascending
+    </div>
+    <div class="context-menu-item" onclick="handleContextMenuAction('sort-desc')">
+      <span>▼</span> Sort Descending
+    </div>
+    <div class="context-menu-item" onclick="handleContextMenuAction('sort-clear')">
+      <span>✕</span> Clear Sort
+    </div>
+    <div class="context-menu-item" onclick="handleContextMenuAction('hide')">
+      <span>👁‍🗨</span> Hide Column
+    </div>
+  </div>
+
   <script>
     const vscode = acquireVsCodeApi();
 
@@ -715,6 +759,8 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     const filterPanel = document.getElementById('filter-panel');
     const filterRowsContainer = document.getElementById('filter-rows-container');
     const btnToggleFilter = document.getElementById('btn-toggle-filter');
+    const contextMenu = document.getElementById('context-menu');
+    let contextMenuColIndex = null;
 
     // Trigger Initial State Request
     vscode.postMessage({ type: 'ready', pageSize: pageSize });
@@ -861,7 +907,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         const sortIndicator = isSorted ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : '';
         
         html += \`
-          <th class="rainbow-hdr-\${c % 10}" onclick="toggleSort(\${c}, event)">
+          <th class="rainbow-hdr-\${c % 10}" onclick="toggleSort(\${c}, event)" oncontextmenu="handleHeaderContextMenu(\${c}, event)">
             <div class="th-content">
               <span class="th-label" title="\${escapeHtml(headers[c])}">
                 \${escapeHtml(headers[c])}\${sortIndicator}
@@ -1107,6 +1153,64 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
       showLoading('Restoring original table...');
       vscode.postMessage({ type: 'ready', pageSize: pageSize });
     }
+
+    function handleHeaderContextMenu(colIndex, event) {
+      event.preventDefault();
+      contextMenuColIndex = colIndex;
+      contextMenu.style.left = \`\${event.clientX}px\`;
+      contextMenu.style.top = \`\${event.clientY}px\`;
+      contextMenu.classList.remove('hidden');
+    }
+
+    function handleContextMenuAction(action) {
+      if (contextMenuColIndex === null) return;
+      
+      switch (action) {
+        case 'sort-asc':
+          sortColIndex = contextMenuColIndex;
+          sortDirection = 'asc';
+          applySort();
+          break;
+        case 'sort-desc':
+          sortColIndex = contextMenuColIndex;
+          sortDirection = 'desc';
+          applySort();
+          break;
+        case 'sort-clear':
+          sortColIndex = null;
+          sortDirection = null;
+          restoreOriginalOrder();
+          break;
+        case 'hide':
+          hiddenCols.add(contextMenuColIndex);
+          renderHeaders();
+          renderRows(currentQuery);
+          updateColumnsCounter();
+          break;
+      }
+      contextMenu.classList.add('hidden');
+    }
+
+    function applySort() {
+      showLoading('Sorting column...');
+      setTimeout(() => {
+        sortData(sortColIndex, sortDirection);
+        renderHeaders();
+        renderRows(currentQuery);
+        hideLoading();
+      }, 50);
+    }
+
+    function restoreOriginalOrder() {
+      showLoading('Restoring original table order...');
+      setTimeout(() => {
+        vscode.postMessage({ type: 'ready', pageSize: loadedRows.length });
+      }, 50);
+    }
+
+    window.addEventListener('click', () => {
+      contextMenu.classList.add('hidden');
+    });
 
     function updateColumnsCounter() {
       const visibleCount = headers.length - hiddenCols.size;
