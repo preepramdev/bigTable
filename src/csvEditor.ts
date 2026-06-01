@@ -654,6 +654,10 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     </div>
 
     <div class="toolbar-right">
+      <label class="rainbow-toggle" title="Show Excel-style column letters (A, B, C...)">
+        <input type="checkbox" id="excel-headers-checkbox" onchange="toggleExcelHeaders()" />
+        <span>A, B, C... Labels</span>
+      </label>
       <label class="rainbow-toggle">
         <input type="checkbox" id="rainbow-checkbox" onchange="toggleRainbow()" />
         <span>Rainbow Columns</span>
@@ -744,6 +748,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
 
     // Column visibility State
     let hiddenCols = new Set();
+    let showExcelHeaders = false;
 
     // DOM Elements
     const tableContainer = document.getElementById('table-container');
@@ -912,12 +917,19 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         const isSorted = sortColIndex === c;
         const sortIndicator = isSorted ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : '';
         
+        const excelLabel = showExcelHeaders 
+          ? \`<div style="font-size: 10px; opacity: 0.5; font-weight: bold; margin-bottom: 2px; text-transform: uppercase;">\${getExcelColumnLabel(c)}</div>\` 
+          : '';
+
         html += \`
           <th class="rainbow-hdr-\${c % 10}" onclick="toggleSort(\${c}, event)" oncontextmenu="handleHeaderContextMenu(\${c}, event)">
             <div class="th-content">
-              <span class="th-label" title="\${escapeHtml(headers[c])}">
-                \${escapeHtml(headers[c])}\${sortIndicator}
-              </span>
+              <div style="display: flex; flex-direction: column;">
+                \${excelLabel}
+                <span class="th-label" title="\${escapeHtml(headers[c])}">
+                  \${escapeHtml(headers[c])}\${sortIndicator}
+                </span>
+              </div>
               <span class="th-actions">
                 <span class="hide-col-btn" title="Hide column" onclick="hideColumn(\${c}, event)">&times;</span>
               </span>
@@ -1035,6 +1047,21 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
       } else {
         table.classList.remove('rainbow-enabled');
       }
+    }
+
+    function toggleExcelHeaders() {
+      showExcelHeaders = document.getElementById('excel-headers-checkbox').checked;
+      renderHeaders();
+    }
+
+    function getExcelColumnLabel(index) {
+      let label = '';
+      let temp = index;
+      while (temp >= 0) {
+        label = String.fromCharCode((temp % 26) + 65) + label;
+        temp = Math.floor(temp / 26) - 1;
+      }
+      return label;
     }
 
     function changeEncoding() {
