@@ -1,5 +1,11 @@
 import * as fs from 'fs';
 
+export interface FilterCondition {
+  colIndex: number;
+  operator: 'contains' | 'starts_with' | 'ends_with' | 'equals' | 'not_equals' | 'greater_than' | 'less_than' | 'greater_than_or_equal' | 'less_than_or_equal';
+  value: string;
+}
+
 export function parseCsvLine(line: string, delimiter = ','): string[] {
   const result: string[] = [];
   let current = '';
@@ -10,7 +16,6 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
     line = line.slice(0, -1);
   }
 
-  // Treat these as quote boundaries, including the unicode replacement character \uFFFD ()
   const quoteChars = ['"', '“', '”', '\uFFFD'];
 
   for (let i = 0; i < line.length; i++) {
@@ -23,7 +28,7 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
             current += char;
             i++; // Skip next quote
           } else {
-            inQuotes = false;
+            inQuotes = !inQuotes;
             quoteChar = '';
           }
         } else {
@@ -42,8 +47,57 @@ export function parseCsvLine(line: string, delimiter = ','): string[] {
   }
   result.push(current);
   
-  // Clean up any stray \uFFFD characters from the final strings to make it completely spotless
   return result.map(val => val.replace(/\uFFFD/g, ''));
+}
+
+export function matchConditions(row: string[], conditions: FilterCondition[]): boolean {
+  for (const cond of conditions) {
+    const cellVal = row[cond.colIndex] || '';
+    const condVal = cond.value;
+    
+    switch (cond.operator) {
+      case 'contains':
+        if (!cellVal.toLowerCase().includes(condVal.toLowerCase())) return false;
+        break;
+      case 'starts_with':
+        if (!cellVal.toLowerCase().startsWith(condVal.toLowerCase())) return false;
+        break;
+      case 'ends_with':
+        if (!cellVal.toLowerCase().endsWith(condVal.toLowerCase())) return false;
+        break;
+      case 'equals':
+        if (cellVal.toLowerCase() !== condVal.toLowerCase()) return false;
+        break;
+      case 'not_equals':
+        if (cellVal.toLowerCase() === condVal.toLowerCase()) return false;
+        break;
+      case 'greater_than': {
+        const numCell = Number(cellVal);
+        const numCond = Number(condVal);
+        if (isNaN(numCell) || isNaN(numCond) || numCell <= numCond) return false;
+        break;
+      }
+      case 'less_than': {
+        const numCell = Number(cellVal);
+        const numCond = Number(condVal);
+        if (isNaN(numCell) || isNaN(numCond) || numCell >= numCond) return false;
+        break;
+      }
+      case 'greater_than_or_equal': {
+        const numCell = Number(cellVal);
+        const numCond = Number(condVal);
+        if (isNaN(numCell) || isNaN(numCond) || numCell < numCond) return false;
+        break;
+      }
+      case 'less_than_or_equal': {
+        const numCell = Number(cellVal);
+        const numCond = Number(condVal);
+        if (isNaN(numCell) || isNaN(numCond) || numCell > numCond) return false;
+        break;
+      }
+    }
+  }
+  return true;
 }
 
 export class CsvEngine {
@@ -178,13 +232,13 @@ export class CsvEngine {
       if (cleanVal === '') continue;
       
       if (!isNaN(Number(cleanVal)) && cleanVal.length > 0) {
-        return false; // Numeric column value indicates data
+        return false;
       }
       if (cleanVal.includes('@') && cleanVal.includes('.')) {
-        return false; // Email address indicates data
+        return false;
       }
       if (cleanVal.startsWith('http://') || cleanVal.startsWith('https://')) {
-        return false; // URL indicates data
+        return false;
       }
     }
     return true;
@@ -312,7 +366,6 @@ export class CsvEngine {
   public async readPage(pageIndex: number, pageSize: number): Promise<string[][]> {
     await this.startIndexing();
 
-    // If there is a header row, we skip row 0 (which contains headers)
     const startRow = pageIndex * pageSize + (this.hasHeaders ? 1 : 0);
     if (startRow >= this.lineOffsets.length) {
       return [];
@@ -384,7 +437,6 @@ export class CsvEngine {
       for (const line of lines) {
         if (isFirstLine) {
           isFirstLine = false;
-          // Only skip the first line if it represents headers!
           if (this.hasHeaders) {
             continue;
           }
@@ -403,6 +455,61 @@ export class CsvEngine {
     if (results.length < maxResults && remainingText) {
       if (remainingText.toLowerCase().includes(lowercaseQuery)) {
         results.push(parseCsvLine(remainingText, this.delimiter));
+      }
+    }
+
+    await fd.close();
+    return { rows: results };
+  }
+
+  public async filter(conditions: FilterCondition[], maxResults = 1000): Promise<{ rows: string[][] }> {
+    const fd = await fs.promises.open(this.filePath, 'r');
+    const stats = await fd.stat();
+    const totalSize = stats.size;
+
+    const results: string[][] = [];
+    
+    let offset = 0;
+    const bufferSize = 1024 * 1024;
+    const buffer = Buffer.alloc(bufferSize);
+    
+    const decoder = new TextDecoder(this.encoding, { fatal: false });
+    let remainingText = '';
+    let isFirstLine = true;
+
+    while (offset < totalSize && results.length < maxResults) {
+      const bytesToRead = Math.min(bufferSize, totalSize - offset);
+      const { bytesRead } = await fd.read(buffer, 0, bytesToRead, offset);
+      offset += bytesRead;
+
+      const chunkText = remainingText + decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
+      const lines = chunkText.split(/\r?\n/);
+      
+      remainingText = lines.pop() || '';
+
+      for (const line of lines) {
+        if (isFirstLine) {
+          isFirstLine = false;
+          if (this.hasHeaders) {
+            continue;
+          }
+        }
+
+        const parsedRow = parseCsvLine(line, this.delimiter);
+        if (matchConditions(parsedRow, conditions)) {
+          results.push(parsedRow);
+          if (results.length >= maxResults) {
+            break;
+          }
+        }
+      }
+    }
+
+    remainingText += decoder.decode(new Uint8Array(), { stream: false });
+    if (results.length < maxResults && remainingText) {
+      const parsedRow = parseCsvLine(remainingText, this.delimiter);
+      if (matchConditions(parsedRow, conditions)) {
+        results.push(parsedRow);
       }
     }
 

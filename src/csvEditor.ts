@@ -124,6 +124,24 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
               });
             }
             break;
+
+          case 'filter':
+            if (!message.conditions || message.conditions.length === 0) {
+              const defaultPage = await document.engine.readPage(0, message.pageSize || 100);
+              webviewPanel.webview.postMessage({
+                type: 'pageData',
+                pageIndex: 0,
+                rows: defaultPage
+              });
+            } else {
+              const filterResults = await document.engine.filter(message.conditions, message.maxResults || 1000);
+              webviewPanel.webview.postMessage({
+                type: 'searchResults',
+                query: '',
+                rows: filterResults.rows
+              });
+            }
+            break;
         }
       } catch (err: any) {
         webviewPanel.webview.postMessage({
@@ -520,6 +538,71 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
       cursor: pointer;
       margin: 0;
     }
+
+    /* Advanced Filter Panel Styles */
+    .filter-panel {
+      background-color: var(--header-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .filter-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--header-fg);
+    }
+
+    .filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .filter-select, .filter-input {
+      background-color: var(--input-bg);
+      color: var(--input-fg);
+      border: 1px solid var(--input-border);
+      padding: 5px;
+      border-radius: 4px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .filter-select {
+      max-width: 180px;
+    }
+
+    .filter-input {
+      flex: 1;
+      max-width: 250px;
+    }
+
+    .filter-footer {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .btn-delete-rule {
+      background-color: transparent;
+      color: var(--input-fg);
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      opacity: 0.6;
+      padding: 0 6px;
+    }
+
+    .btn-delete-rule:hover {
+      color: var(--vscode-inputValidation-errorBorder, #be1111);
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -535,6 +618,9 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         <input type="text" id="search-input" placeholder="Search / Filter rows (Press Enter)..." autocomplete="off" />
         <span id="search-clear" class="search-clear" onclick="clearSearch()">&times;</span>
       </div>
+      <button class="btn btn-secondary" id="btn-toggle-filter" onclick="toggleFilterPanel()" title="Advanced Condition Filter (Multi-column)" style="margin-left: 4px;">
+        <span>⚙️ Filter</span>
+      </button>
       <span id="status-text" class="status-text">Loading file...</span>
     </div>
 
@@ -555,6 +641,20 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         <span id="columns-count">Columns: --</span>
         <button id="btn-reset-cols" class="btn btn-secondary hidden" onclick="resetColumns()">Show All</button>
       </div>
+    </div>
+  </div>
+
+  <div id="filter-panel" class="filter-panel hidden">
+    <div class="filter-header">
+      <span style="font-weight: 600; font-size: 13px; color: var(--header-fg);">Advanced Condition Filters (AND)</span>
+      <button class="btn btn-secondary" onclick="addFilterRow()" style="padding: 3px 8px; font-size: 11px;">+ Add Rule</button>
+    </div>
+    <div id="filter-rows-container">
+      <!-- Filter rows will be dynamically appended here -->
+    </div>
+    <div class="filter-footer">
+      <button class="btn" onclick="applyAdvancedFilter()">Apply Filter</button>
+      <button class="btn btn-secondary" onclick="clearAdvancedFilter()">Clear All</button>
     </div>
   </div>
 
@@ -612,6 +712,9 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     const loadMoreContainer = document.getElementById('load-more-container');
     const errorBanner = document.getElementById('error-banner');
     const errorMessage = document.getElementById('error-message');
+    const filterPanel = document.getElementById('filter-panel');
+    const filterRowsContainer = document.getElementById('filter-rows-container');
+    const btnToggleFilter = document.getElementById('btn-toggle-filter');
 
     // Trigger Initial State Request
     vscode.postMessage({ type: 'ready', pageSize: pageSize });
@@ -889,6 +992,120 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         encoding: encoding,
         pageSize: pageSize
       });
+    }
+
+    function toggleFilterPanel() {
+      filterPanel.classList.toggle('hidden');
+      if (!filterPanel.classList.contains('hidden') && filterRowsContainer.children.length === 0) {
+        addFilterRow();
+      }
+    }
+
+    function addFilterRow() {
+      if (!headers || headers.length === 0) return;
+
+      const rowDiv = document.createElement('div');
+      rowDiv.className = 'filter-row';
+
+      const colSelect = document.createElement('select');
+      colSelect.className = 'filter-select';
+      for (let c = 0; c < headers.length; c++) {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = headers[c];
+        colSelect.appendChild(opt);
+      }
+
+      const opSelect = document.createElement('select');
+      opSelect.className = 'filter-select';
+      const ops = [
+        { val: 'contains', label: 'contains' },
+        { val: 'starts_with', label: 'starts with' },
+        { val: 'ends_with', label: 'ends with' },
+        { val: 'equals', label: 'equals (=)' },
+        { val: 'not_equals', label: 'not equals (≠)' },
+        { val: 'greater_than', label: 'greater than (>)' },
+        { val: 'less_than', label: 'less than (<)' },
+        { val: 'greater_than_or_equal', label: 'greater or equal (≥)' },
+        { val: 'less_than_or_equal', label: 'less or equal (≤)' }
+      ];
+      for (const op of ops) {
+        const opt = document.createElement('option');
+        opt.value = op.val;
+        opt.textContent = op.label;
+        opSelect.appendChild(opt);
+      }
+
+      const valInput = document.createElement('input');
+      valInput.type = 'text';
+      valInput.className = 'filter-input';
+      valInput.placeholder = 'Value...';
+      valInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          applyAdvancedFilter();
+        }
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-delete-rule';
+      delBtn.innerHTML = '&times;';
+      delBtn.title = 'Remove this rule';
+      delBtn.onclick = () => {
+        rowDiv.remove();
+        if (filterRowsContainer.children.length === 0) {
+          clearAdvancedFilter();
+        }
+      };
+
+      rowDiv.appendChild(colSelect);
+      rowDiv.appendChild(opSelect);
+      rowDiv.appendChild(valInput);
+      rowDiv.appendChild(delBtn);
+
+      filterRowsContainer.appendChild(rowDiv);
+    }
+
+    function applyAdvancedFilter() {
+      const rows = filterRowsContainer.getElementsByClassName('filter-row');
+      const conditions = [];
+
+      for (const r of rows) {
+        const selects = r.getElementsByClassName('filter-select');
+        const input = r.getElementsByClassName('filter-input')[0];
+        const val = input.value.trim();
+
+        if (val === '') continue;
+
+        conditions.push({
+          colIndex: parseInt(selects[0].value, 10),
+          operator: selects[1].value,
+          value: val
+        });
+      }
+
+      if (conditions.length === 0) {
+        clearAdvancedFilter();
+        return;
+      }
+
+      isSearching = true;
+      allRowsLoaded = true;
+      showLoading('Applying advanced filters...');
+      vscode.postMessage({
+        type: 'filter',
+        conditions: conditions,
+        maxResults: 1000
+      });
+    }
+
+    function clearAdvancedFilter() {
+      filterRowsContainer.innerHTML = '';
+      filterPanel.classList.add('hidden');
+      isSearching = false;
+      allRowsLoaded = false;
+      pageIndex = 0;
+      showLoading('Restoring original table...');
+      vscode.postMessage({ type: 'ready', pageSize: pageSize });
     }
 
     function updateColumnsCounter() {
