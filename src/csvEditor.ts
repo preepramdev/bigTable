@@ -134,7 +134,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
                 rows: defaultPage
               });
             } else {
-              const searchResults = await document.engine.search(message.query, message.maxResults || 1000);
+              const searchResults = await document.engine.search(message.query, message.maxResults || 1000, message.columnIndices);
               webviewPanel.webview.postMessage({
                 type: 'searchResults',
                 query: message.query,
@@ -313,6 +313,75 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       opacity: 1;
     }
 
+    .search-scope-btn {
+      cursor: pointer;
+      font-size: 11px;
+      opacity: 0.7;
+      padding: 2px 6px;
+      border-radius: 3px;
+      white-space: nowrap;
+      user-select: none;
+      flex-shrink: 0;
+    }
+
+    .search-scope-btn:hover {
+      opacity: 1;
+      background-color: rgba(255, 255, 255, 0.08);
+    }
+
+    .search-scope-dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background-color: var(--header-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      z-index: 1000;
+      max-height: 250px;
+      overflow-y: auto;
+      margin-top: 2px;
+    }
+
+    .search-scope-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .search-scope-item:hover {
+      background-color: var(--hover-bg);
+    }
+
+    .search-scope-item input {
+      margin: 0;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .search-scope-item .scope-col-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .search-scope-item .scope-col-idx {
+      opacity: 0.4;
+      font-size: 10px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    .search-scope-all {
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+    }
+
     .toolbar-right {
       display: flex;
       align-items: center;
@@ -382,7 +451,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
 
     th {
       position: sticky;
-      top: 0;
+      top: 22px;
       background-color: var(--header-bg);
       color: var(--header-fg);
       padding: 8px 12px;
@@ -466,6 +535,37 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       left: 0;
       z-index: 5;
       border-right: 2px solid var(--border);
+    }
+
+    .label-row th {
+      top: 0;
+      z-index: 12;
+      height: 22px;
+      padding: 2px 12px;
+      font-size: 11px;
+      font-weight: bold;
+      opacity: 0.5;
+      text-transform: uppercase;
+      text-align: center;
+      cursor: default;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .label-row th:hover {
+      background-color: var(--header-bg);
+    }
+
+    #csv-table.no-lock-header th {
+      position: static;
+    }
+
+    #csv-table.no-lock-header .label-row th {
+      position: sticky;
+      top: 0;
+    }
+
+    .row-index-hdr-lbl {
+      width: 60px;
     }
 
     th.row-index-hdr {
@@ -663,7 +763,150 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       opacity: 1;
     }
 
+    /* Column Visibility Panel Styles */
+    .column-panel {
+      background-color: var(--header-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 300px;
+    }
+
+    .column-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--header-fg);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .column-panel-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .column-panel-search input {
+      background-color: var(--input-bg);
+      color: var(--input-fg);
+      border: 1px solid var(--input-border);
+      padding: 5px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .column-panel-search input:focus {
+      border-color: var(--accent);
+    }
+
+    .column-panel-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow-y: auto;
+      max-height: 200px;
+    }
+
+    .column-panel-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 6px;
+      border-radius: 3px;
+      font-size: 12px;
+      color: var(--fg);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .column-panel-item:hover {
+      background-color: var(--hover-bg);
+    }
+
+    .column-panel-item input {
+      cursor: pointer;
+      margin: 0;
+      flex-shrink: 0;
+    }
+
+    .column-panel-item .col-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .column-panel-item .col-idx {
+      opacity: 0.4;
+      font-size: 10px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
     /* Custom Context Menu Styles */
+    /* Toolbar Menu Dropdown */
+    .toolbar-menu {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      background-color: var(--header-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      z-index: 1000;
+      min-width: 200px;
+      padding: 6px 0;
+      margin-top: 4px;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .menu-item:hover {
+      background-color: var(--hover-bg);
+    }
+
+    .menu-item input[type="checkbox"] {
+      margin: 0;
+      cursor: pointer;
+    }
+
+    .menu-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .menu-select {
+      background-color: var(--input-bg);
+      color: var(--input-fg);
+      border: 1px solid var(--input-border);
+      padding: 3px 5px;
+      border-radius: 3px;
+      font-size: 11px;
+      outline: none;
+      flex: 1;
+    }
+
+    .menu-divider {
+      height: 1px;
+      background-color: var(--border);
+      margin: 4px 0;
+    }
+
     .context-menu {
       position: absolute;
       background-color: var(--header-bg);
@@ -702,9 +945,11 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
   <div class="toolbar">
     <div class="toolbar-left">
       <div class="toolbar-title" title="${filename}">${filename}</div>
-      <div class="search-box">
+      <div class="search-box" style="position: relative;">
         <input type="text" id="search-input" placeholder="Search / Filter rows (Press Enter)..." autocomplete="off" />
+        <span id="search-scope-btn" class="search-scope-btn" onclick="toggleSearchScope()" title="Limit search to specific columns">🔍 All</span>
         <span id="search-clear" class="search-clear" onclick="clearSearch()">&times;</span>
+        <div id="search-scope-dropdown" class="search-scope-dropdown hidden"></div>
       </div>
       <button class="btn btn-secondary" id="btn-toggle-filter" onclick="toggleFilterPanel()" title="Advanced Condition Filter (Multi-column)" style="margin-left: 4px;">
         <span>⚙️ Filter</span>
@@ -712,38 +957,50 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       <span id="status-text" class="status-text">Loading file...</span>
     </div>
 
-    <div class="toolbar-right">
-      <label class="rainbow-toggle" title="Show Excel-style column letters (A, B, C...)">
-        <input type="checkbox" id="excel-headers-checkbox" onchange="toggleExcelHeaders()" />
-        <span>A, B, C... Labels</span>
-      </label>
-      <label class="rainbow-toggle">
-        <input type="checkbox" id="rainbow-checkbox" onchange="toggleRainbow()" />
-        <span>Rainbow Columns</span>
-      </label>
-      <label class="rainbow-toggle" title="Toggle cell editing mode">
-        <input type="checkbox" id="edit-mode-checkbox" onchange="toggleEditMode()" />
-        <span>✏️ Edit Mode</span>
-      </label>
-      <div id="edit-buttons-container" style="display: none; gap: 6px; align-items: center;">
-        <button class="btn" id="btn-save" onclick="triggerSave()" title="Save Changes (Ctrl+S / Cmd+S)" style="padding: 4px 8px; font-size: 11px;" disabled>💾 Save</button>
-        <button class="btn btn-secondary" id="btn-undo" onclick="triggerUndo()" title="Undo (Ctrl+Z / Cmd+Z)" style="padding: 4px 8px; font-size: 11px;" disabled>↩️ Undo</button>
-      </div>
-      <select id="encoding-select" class="page-size-select" onchange="changeEncoding()" title="Change File Encoding">
-        <option value="utf-8" selected>UTF-8</option>
-        <option value="windows-874">Windows-874 (Thai)</option>
-        <option value="windows-1252">Windows-1252 (Western)</option>
-        <option value="utf-16le">UTF-16LE</option>
-        <option value="shift-jis">Shift-JIS (Japanese)</option>
-        <option value="gb18030">GB18030 (Chinese)</option>
-      </select>
-      <div id="sort-badge" class="columns-badge hidden" style="background-color: rgba(14, 99, 156, 0.15); border-color: var(--accent);">
-        <span id="sort-text">Sorted by: --</span>
-        <button class="btn btn-secondary" onclick="clearSortFromBadge()" title="Clear Sorting" style="padding: 1px 5px; line-height: 1; font-size: 11px; margin-left: 4px; background: transparent; border: none; cursor: pointer;">&times;</button>
-      </div>
-      <div id="columns-badge" class="columns-badge hidden">
-        <span id="columns-count">Columns: --</span>
-        <button id="btn-reset-cols" class="btn btn-secondary hidden" onclick="resetColumns()">Show All</button>
+    <div class="toolbar-right" style="position: relative;">
+      <button class="btn btn-secondary" onclick="toggleToolbarMenu()" title="More options" style="padding: 4px 8px; font-size: 12px; white-space: nowrap;">☰ Menu</button>
+      <div id="toolbar-menu" class="toolbar-menu hidden">
+        <label class="menu-item" title="Keep column headers visible while scrolling">
+          <input type="checkbox" id="lock-header-checkbox" checked onchange="toggleLockHeader()" />
+          <span>Lock Header</span>
+        </label>
+        <label class="menu-item">
+          <input type="checkbox" id="rainbow-checkbox" onchange="toggleRainbow()" />
+          <span>Rainbow Columns</span>
+        </label>
+        <label class="menu-item" title="Toggle cell editing mode">
+          <input type="checkbox" id="edit-mode-checkbox" onchange="toggleEditMode()" />
+          <span>✏️ Edit Mode</span>
+        </label>
+        <div id="edit-buttons-container" style="display: none;" class="menu-row">
+          <button class="btn" id="btn-save" onclick="triggerSave()" title="Save Changes (Ctrl+S / Cmd+S)" style="padding: 3px 8px; font-size: 11px;" disabled>💾 Save</button>
+          <button class="btn btn-secondary" id="btn-undo" onclick="triggerUndo()" title="Undo (Ctrl+Z / Cmd+Z)" style="padding: 3px 8px; font-size: 11px;" disabled>↩️ Undo</button>
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-row">
+          <span style="opacity: 0.7; width: 60px;">Encoding:</span>
+          <select id="encoding-select" class="menu-select" onchange="changeEncoding()">
+            <option value="utf-8" selected>UTF-8</option>
+            <option value="windows-874">Windows-874 (Thai)</option>
+            <option value="windows-1252">Windows-1252 (Western)</option>
+            <option value="utf-16le">UTF-16LE</option>
+            <option value="shift-jis">Shift-JIS (Japanese)</option>
+            <option value="gb18030">GB18030 (Chinese)</option>
+          </select>
+        </div>
+        <div class="menu-divider"></div>
+        <div id="sort-badge" class="menu-row hidden" style="justify-content: space-between;">
+          <span id="sort-text">Sorted: --</span>
+          <button class="btn btn-secondary" onclick="clearSortFromBadge()" title="Clear Sorting" style="padding: 1px 6px; font-size: 10px; line-height: 1.2;">&times;</button>
+        </div>
+        <div class="menu-item" onclick="toggleColumnPanel()">
+          <span style="width: 18px; text-align: center;">☰</span>
+          <span>Column Visibility</span>
+        </div>
+        <div id="columns-badge" class="menu-row hidden" style="justify-content: space-between;">
+          <span id="columns-count">Cols: --</span>
+          <button id="btn-reset-cols" class="btn btn-secondary hidden" onclick="event.stopPropagation(); resetColumns()" style="padding: 1px 6px; font-size: 10px;">Show All</button>
+        </div>
       </div>
     </div>
   </div>
@@ -759,6 +1016,22 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
     <div class="filter-footer">
       <button class="btn" onclick="applyAdvancedFilter()">Apply Filter</button>
       <button class="btn btn-secondary" onclick="clearAdvancedFilter()">Clear All</button>
+    </div>
+  </div>
+
+  <div id="column-panel" class="column-panel hidden">
+    <div class="column-panel-header">
+      <span>Column Visibility</span>
+      <div class="column-panel-actions">
+        <button class="btn btn-secondary" onclick="checkAllColumns()" style="padding: 2px 8px; font-size: 11px;">Show All</button>
+        <button class="btn btn-secondary" onclick="uncheckAllColumns()" style="padding: 2px 8px; font-size: 11px;">Hide All</button>
+      </div>
+    </div>
+    <div class="column-panel-search">
+      <input type="text" id="column-panel-search" placeholder="Filter columns..." oninput="filterColumnPanel()" autocomplete="off" />
+    </div>
+    <div class="column-panel-list" id="column-panel-list">
+      <!-- Column checkboxes rendered here -->
     </div>
   </div>
 
@@ -809,13 +1082,16 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
     let isLoadingMore = false;
     let allRowsLoaded = false;
 
+    // Search Column Scope (empty = all columns)
+    let searchColIndices = new Set();
+
     // Sorting State
     let sortColIndex = null;
     let sortDirection = null; // 'asc' | 'desc' | null
 
     // Column visibility State
     let hiddenCols = new Set();
-    let showExcelHeaders = false;
+    let lockHeader = true;
 
     // Edit mode State
     let editModeEnabled = false;
@@ -840,8 +1116,14 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
     const btnToggleFilter = document.getElementById('btn-toggle-filter');
     const contextMenu = document.getElementById('context-menu');
     let contextMenuColIndex = null;
+    const columnPanel = document.getElementById('column-panel');
+    const columnPanelList = document.getElementById('column-panel-list');
+    const columnPanelSearch = document.getElementById('column-panel-search');
     const sortBadge = document.getElementById('sort-badge');
     const sortText = document.getElementById('sort-text');
+    const searchScopeBtn = document.getElementById('search-scope-btn');
+    const searchScopeDropdown = document.getElementById('search-scope-dropdown');
+    const toolbarMenu = document.getElementById('toolbar-menu');
 
     // Trigger Initial State Request
     vscode.postMessage({ type: 'ready', pageSize: pageSize });
@@ -864,6 +1146,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
           renderHeaders();
           renderRows();
           updateStatus();
+          renderColumnPanel();
           break;
 
         case 'progress':
@@ -872,6 +1155,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
           if (message.headers && headers.length === 0) {
             headers = message.headers;
             renderHeaders();
+            renderColumnPanel();
           }
           updateStatus();
           break;
@@ -1001,8 +1285,14 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
         return;
       }
       isSearching = true;
-      showLoading(\`Searching for "\${query}" across file...\`);
-      vscode.postMessage({ type: 'search', query: query, maxResults: 1000 });
+      const scope = searchColIndices.size > 0 ? \` in \${searchColIndices.size} cols\` : '';
+      showLoading(\`Searching for "\${query}"\${scope}...\`);
+      vscode.postMessage({
+        type: 'search',
+        query: query,
+        maxResults: 1000,
+        columnIndices: searchColIndices.size > 0 ? Array.from(searchColIndices) : undefined
+      });
     }
 
     function clearSearch() {
@@ -1017,6 +1307,81 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       vscode.postMessage({ type: 'ready', pageSize: pageSize });
     }
 
+    // Search Column Scope
+    function toggleSearchScope() {
+      searchScopeDropdown.classList.toggle('hidden');
+      if (!searchScopeDropdown.classList.contains('hidden')) {
+        renderSearchScope();
+      }
+    }
+
+    function renderSearchScope() {
+      if (!headers || headers.length === 0) return;
+      let html = \`
+        <div class="search-scope-item search-scope-all" onclick="toggleSearchScopeAll()">
+          <input type="checkbox" \${searchColIndices.size === 0 ? 'checked' : ''} />
+          <span>All Columns</span>
+        </div>
+      \`;
+      for (let c = 0; c < headers.length; c++) {
+        const checked = searchColIndices.size === 0 || searchColIndices.has(c) ? 'checked' : '';
+        html += \`
+          <div class="search-scope-item" onclick="toggleSearchScopeCol(\${c}, event)">
+            <input type="checkbox" \${checked} />
+            <span class="scope-col-name" title="\${escapeHtml(headers[c])}">\${escapeHtml(headers[c])}</span>
+            <span class="scope-col-idx">#\${c + 1}</span>
+          </div>
+        \`;
+      }
+      searchScopeDropdown.innerHTML = html;
+    }
+
+    function toggleSearchScopeAll() {
+      if (searchColIndices.size === 0) {
+        searchColIndices = new Set();
+      } else {
+        searchColIndices.clear();
+      }
+      updateSearchScopeLabel();
+      if (!searchScopeDropdown.classList.contains('hidden')) {
+        renderSearchScope();
+      }
+    }
+
+    function toggleSearchScopeCol(colIndex, event) {
+      event.stopPropagation();
+      if (searchColIndices.size === 0) {
+        searchColIndices = new Set(headers.keys());
+      }
+      if (searchColIndices.has(colIndex)) {
+        searchColIndices.delete(colIndex);
+        if (searchColIndices.size === 0) {
+          searchColIndices = new Set();
+        }
+      } else {
+        searchColIndices.add(colIndex);
+      }
+      updateSearchScopeLabel();
+      if (!searchScopeDropdown.classList.contains('hidden')) {
+        renderSearchScope();
+      }
+    }
+
+    function updateSearchScopeLabel() {
+      if (searchColIndices.size === 0) {
+        searchScopeBtn.textContent = '🔍 All';
+      } else {
+        searchScopeBtn.textContent = \`🔍 \${searchColIndices.size}\`;
+      }
+    }
+
+    // Close search scope dropdown on outside click
+    document.addEventListener('click', (e) => {
+      if (!searchScopeDropdown.classList.contains('hidden') && !e.target.closest('.search-box')) {
+        searchScopeDropdown.classList.add('hidden');
+      }
+    });
+
     // Header Rendering
     function renderHeaders() {
       if (!headers || headers.length === 0) return;
@@ -1024,26 +1389,24 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       columnsBadge.classList.remove('hidden');
       updateColumnsCounter();
 
-      let html = '<th class="row-index-hdr">#</th>';
+      let labelHtml = '<th class="row-index-hdr row-index-hdr-lbl"></th>';
+      let headerHtml = '<th class="row-index-hdr">#</th>';
       for (let c = 0; c < headers.length; c++) {
         if (hiddenCols.has(c)) continue;
         
         const isSorted = sortColIndex === c;
         const sortIndicator = isSorted ? (sortDirection === 'asc' ? ' ▲' : ' ▼') : '';
         
-        const excelLabel = showExcelHeaders 
-          ? \`<div style="font-size: 10px; opacity: 0.5; font-weight: bold; margin-bottom: 2px; text-transform: uppercase;">\${getExcelColumnLabel(c)}</div>\` 
-          : '';
+        labelHtml += \`
+          <th class="label-cell rainbow-hdr-\${c % 10}">\${getExcelColumnLabel(c)}</th>
+        \`;
 
-        html += \`
+        headerHtml += \`
           <th class="rainbow-hdr-\${c % 10}" onclick="toggleSort(\${c}, event)" oncontextmenu="handleHeaderContextMenu(\${c}, event)">
             <div class="th-content">
-              <div style="display: flex; flex-direction: column;">
-                \${excelLabel}
-                <span class="th-label" title="\${escapeHtml(headers[c])}">
-                  \${escapeHtml(headers[c])}\${sortIndicator}
-                </span>
-              </div>
+              <span class="th-label" title="\${escapeHtml(headers[c])}">
+                \${escapeHtml(headers[c])}\${sortIndicator}
+              </span>
               <span class="th-actions">
                 <span class="hide-col-btn" title="Hide column" onclick="hideColumn(\${c}, event)">&times;</span>
               </span>
@@ -1051,7 +1414,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
           </th>
         \`;
       }
-      tableHead.innerHTML = \`<tr>\${html}</tr>\`;
+      tableHead.innerHTML = \`<tr class="label-row">\${labelHtml}</tr><tr>\${headerHtml}</tr>\`;
     }
 
     // Rows Rendering
@@ -1168,10 +1531,89 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       renderHeaders();
       renderRows(currentQuery);
       updateColumnsCounter();
+      renderColumnPanel();
     }
 
     function resetColumns() {
       hiddenCols.clear();
+      renderHeaders();
+      renderRows(currentQuery);
+      updateColumnsCounter();
+      renderColumnPanel();
+    }
+
+    // Column Visibility Panel
+    function toggleColumnPanel() {
+      columnPanel.classList.toggle('hidden');
+      if (!columnPanel.classList.contains('hidden')) {
+        renderColumnPanel();
+        columnPanelSearch.value = '';
+        columnPanelSearch.focus();
+      }
+    }
+
+    function renderColumnPanel() {
+      if (!headers || headers.length === 0) return;
+      let html = '';
+      for (let c = 0; c < headers.length; c++) {
+        const checked = !hiddenCols.has(c) ? 'checked' : '';
+        html += \`
+          <label class="column-panel-item" data-col-index="\${c}">
+            <input type="checkbox" \${checked} onchange="onColumnToggle(\${c}, this.checked)" />
+            <span class="col-name" title="\${escapeHtml(headers[c])}">\${escapeHtml(headers[c])}</span>
+            <span class="col-idx">#\${c + 1}</span>
+          </label>
+        \`;
+      }
+      columnPanelList.innerHTML = html;
+    }
+
+    function filterColumnPanel() {
+      const query = columnPanelSearch.value.toLowerCase();
+      const items = columnPanelList.querySelectorAll('.column-panel-item');
+      for (const item of items) {
+        const name = item.querySelector('.col-name').textContent.toLowerCase();
+        const idx = item.querySelector('.col-idx').textContent;
+        item.style.display = (!query || name.includes(query) || idx.includes(query)) ? '' : 'none';
+      }
+    }
+
+    function onColumnToggle(colIndex, checked) {
+      if (checked) {
+        hiddenCols.delete(colIndex);
+      } else {
+        hiddenCols.add(colIndex);
+      }
+      renderHeaders();
+      renderRows(currentQuery);
+      updateColumnsCounter();
+    }
+
+    function checkAllColumns() {
+      const items = columnPanelList.querySelectorAll('.column-panel-item');
+      for (const item of items) {
+        const cb = item.querySelector('input[type="checkbox"]');
+        if (cb && !cb.checked) {
+          cb.checked = true;
+          const colIndex = parseInt(item.dataset.colIndex, 10);
+          hiddenCols.delete(colIndex);
+        }
+      }
+      renderHeaders();
+      renderRows(currentQuery);
+      updateColumnsCounter();
+    }
+
+    function uncheckAllColumns() {
+      const items = columnPanelList.querySelectorAll('.column-panel-item');
+      for (const item of items) {
+        const cb = item.querySelector('input[type="checkbox"]');
+        if (cb && cb.checked) {
+          cb.checked = false;
+          const colIndex = parseInt(item.dataset.colIndex, 10);
+          hiddenCols.add(colIndex);
+        }
+      }
       renderHeaders();
       renderRows(currentQuery);
       updateColumnsCounter();
@@ -1187,9 +1629,14 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       }
     }
 
-    function toggleExcelHeaders() {
-      showExcelHeaders = document.getElementById('excel-headers-checkbox').checked;
-      renderHeaders();
+    function toggleLockHeader() {
+      lockHeader = document.getElementById('lock-header-checkbox').checked;
+      const table = document.getElementById('csv-table');
+      if (lockHeader) {
+        table.classList.remove('no-lock-header');
+      } else {
+        table.classList.add('no-lock-header');
+      }
     }
 
     function toggleEditMode() {
@@ -1394,6 +1841,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
           renderHeaders();
           renderRows(currentQuery);
           updateColumnsCounter();
+          renderColumnPanel();
           break;
       }
       contextMenu.classList.add('hidden');
@@ -1433,9 +1881,16 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       restoreOriginalOrder();
     }
 
-    window.addEventListener('click', () => {
+    window.addEventListener('click', (e) => {
       contextMenu.classList.add('hidden');
+      if (!toolbarMenu.classList.contains('hidden') && !e.target.closest('.toolbar-right')) {
+        toolbarMenu.classList.add('hidden');
+      }
     });
+
+    function toggleToolbarMenu() {
+      toolbarMenu.classList.toggle('hidden');
+    }
 
     function updateColumnsCounter() {
       const visibleCount = headers.length - hiddenCols.size;

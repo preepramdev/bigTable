@@ -431,7 +431,7 @@ export class CsvEngine {
     return parsedRows;
   }
 
-  public async search(query: string, maxResults = 1000): Promise<{ rows: EditedRow[] }> {
+  public async search(query: string, maxResults = 1000, columnIndices?: number[]): Promise<{ rows: EditedRow[] }> {
     const fd = await fs.promises.open(this.filePath, 'r');
     const stats = await fd.stat();
     const totalSize = stats.size;
@@ -472,8 +472,10 @@ export class CsvEngine {
           ? this.pendingEdits.get(rowId)!
           : parseCsvLine(line, this.delimiter);
 
-        // Search in the values (including edited ones)
-        const searchText = values.join(this.delimiter).toLowerCase();
+        // Search in specific columns or all columns
+        const searchText = columnIndices && columnIndices.length > 0
+          ? columnIndices.map(i => values[i] || '').join(' ').toLowerCase()
+          : values.join(this.delimiter).toLowerCase();
         if (searchText.includes(lowercaseQuery)) {
           results.push({ id: rowId, values });
           if (results.length >= maxResults) {
@@ -490,7 +492,9 @@ export class CsvEngine {
         ? this.pendingEdits.get(rowId)!
         : parseCsvLine(remainingText, this.delimiter);
       
-      const searchText = values.join(this.delimiter).toLowerCase();
+      const searchText = columnIndices && columnIndices.length > 0
+        ? columnIndices.map(i => values[i] || '').join(' ').toLowerCase()
+        : values.join(this.delimiter).toLowerCase();
       if (searchText.includes(lowercaseQuery)) {
         results.push({ id: rowId, values });
       }
