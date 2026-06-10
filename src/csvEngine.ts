@@ -100,6 +100,11 @@ export function matchConditions(row: string[], conditions: FilterCondition[]): b
   return true;
 }
 
+export interface EditedRow {
+  id: number;
+  values: string[];
+}
+
 export class CsvEngine {
   private filePath: string;
   private lineOffsets: number[] = [];
@@ -110,6 +115,10 @@ export class CsvEngine {
   private delimiter = ',';
   private encoding = 'utf-8';
   private hasHeaders = true;
+  
+  // Edit tracking
+  private pendingEdits = new Map<number, string[]>();
+  private editHistory: Array<{rowId: number, oldValues: string[], newValues: string[]}> = [];
 
   constructor(filePath: string, onProgress?: (rowsCount: number, isComplete: boolean) => void) {
     this.filePath = filePath;
@@ -363,7 +372,7 @@ export class CsvEngine {
     return bestDelimiter;
   }
 
-  public async readPage(pageIndex: number, pageSize: number): Promise<string[][]> {
+  public async readPage(pageIndex: number, pageSize: number): Promise<EditedRow[]> {
     await this.startIndexing();
 
     const startRow = pageIndex * pageSize + (this.hasHeaders ? 1 : 0);
@@ -400,21 +409,35 @@ export class CsvEngine {
       return true;
     });
 
-    const parsedRows: string[][] = [];
+    const parsedRows: EditedRow[] = [];
+    let currentRowId = pageIndex * pageSize;
+    
     for (const line of lines) {
-      parsedRows.push(parseCsvLine(line, this.delimiter));
+      const rowId = currentRowId++;
+      // Check if this row has pending edits
+      if (this.pendingEdits.has(rowId)) {
+        parsedRows.push({
+          id: rowId,
+          values: this.pendingEdits.get(rowId)!
+        });
+      } else {
+        parsedRows.push({
+          id: rowId,
+          values: parseCsvLine(line, this.delimiter)
+        });
+      }
     }
 
     return parsedRows;
   }
 
-  public async search(query: string, maxResults = 1000): Promise<{ rows: string[][] }> {
+  public async search(query: string, maxResults = 1000): Promise<{ rows: EditedRow[] }> {
     const fd = await fs.promises.open(this.filePath, 'r');
     const stats = await fd.stat();
     const totalSize = stats.size;
 
     const lowercaseQuery = query.toLowerCase();
-    const results: string[][] = [];
+    const results: EditedRow[] = [];
     
     let offset = 0;
     const bufferSize = 1024 * 1024;
@@ -423,6 +446,7 @@ export class CsvEngine {
     const decoder = new TextDecoder(this.encoding, { fatal: false });
     let remainingText = '';
     let isFirstLine = true;
+    let rowIndex = this.hasHeaders ? -1 : 0;
 
     while (offset < totalSize && results.length < maxResults) {
       const bytesToRead = Math.min(bufferSize, totalSize - offset);
@@ -442,8 +466,16 @@ export class CsvEngine {
           }
         }
 
-        if (line.toLowerCase().includes(lowercaseQuery)) {
-          results.push(parseCsvLine(line, this.delimiter));
+        const rowId = rowIndex++;
+        // Get values (either edited or from file)
+        const values = this.pendingEdits.has(rowId)
+          ? this.pendingEdits.get(rowId)!
+          : parseCsvLine(line, this.delimiter);
+
+        // Search in the values (including edited ones)
+        const searchText = values.join(this.delimiter).toLowerCase();
+        if (searchText.includes(lowercaseQuery)) {
+          results.push({ id: rowId, values });
           if (results.length >= maxResults) {
             break;
           }
@@ -453,8 +485,14 @@ export class CsvEngine {
 
     remainingText += decoder.decode(new Uint8Array(), { stream: false });
     if (results.length < maxResults && remainingText) {
-      if (remainingText.toLowerCase().includes(lowercaseQuery)) {
-        results.push(parseCsvLine(remainingText, this.delimiter));
+      const rowId = rowIndex++;
+      const values = this.pendingEdits.has(rowId)
+        ? this.pendingEdits.get(rowId)!
+        : parseCsvLine(remainingText, this.delimiter);
+      
+      const searchText = values.join(this.delimiter).toLowerCase();
+      if (searchText.includes(lowercaseQuery)) {
+        results.push({ id: rowId, values });
       }
     }
 
@@ -462,12 +500,12 @@ export class CsvEngine {
     return { rows: results };
   }
 
-  public async filter(conditions: FilterCondition[], maxResults = 1000): Promise<{ rows: string[][] }> {
+  public async filter(conditions: FilterCondition[], maxResults = 1000): Promise<{ rows: EditedRow[] }> {
     const fd = await fs.promises.open(this.filePath, 'r');
     const stats = await fd.stat();
     const totalSize = stats.size;
 
-    const results: string[][] = [];
+    const results: EditedRow[] = [];
     
     let offset = 0;
     const bufferSize = 1024 * 1024;
@@ -476,6 +514,7 @@ export class CsvEngine {
     const decoder = new TextDecoder(this.encoding, { fatal: false });
     let remainingText = '';
     let isFirstLine = true;
+    let rowIndex = this.hasHeaders ? -1 : 0;
 
     while (offset < totalSize && results.length < maxResults) {
       const bytesToRead = Math.min(bufferSize, totalSize - offset);
@@ -495,9 +534,14 @@ export class CsvEngine {
           }
         }
 
-        const parsedRow = parseCsvLine(line, this.delimiter);
-        if (matchConditions(parsedRow, conditions)) {
-          results.push(parsedRow);
+        const rowId = rowIndex++;
+        // Get values (either edited or from file)
+        const values = this.pendingEdits.has(rowId)
+          ? this.pendingEdits.get(rowId)!
+          : parseCsvLine(line, this.delimiter);
+
+        if (matchConditions(values, conditions)) {
+          results.push({ id: rowId, values });
           if (results.length >= maxResults) {
             break;
           }
@@ -507,13 +551,232 @@ export class CsvEngine {
 
     remainingText += decoder.decode(new Uint8Array(), { stream: false });
     if (results.length < maxResults && remainingText) {
-      const parsedRow = parseCsvLine(remainingText, this.delimiter);
-      if (matchConditions(parsedRow, conditions)) {
-        results.push(parsedRow);
+      const rowId = rowIndex++;
+      const values = this.pendingEdits.has(rowId)
+        ? this.pendingEdits.get(rowId)!
+        : parseCsvLine(remainingText, this.delimiter);
+      
+      if (matchConditions(values, conditions)) {
+        results.push({ id: rowId, values });
       }
     }
 
     await fd.close();
     return { rows: results };
+  }
+
+  // Edit methods
+  public async editCell(rowId: number, colIndex: number, newValue: string): Promise<{ oldValues: string[], newValues: string[] }> {
+    if (rowId < 0 || rowId >= this.getTotalRows()) {
+      throw new Error(`Invalid row ID: ${rowId}`);
+    }
+    if (colIndex < 0 || colIndex >= this.headers.length) {
+      throw new Error(`Invalid column index: ${colIndex}`);
+    }
+
+    // Get current values (either from pending edits or from file)
+    const currentValues = this.pendingEdits.has(rowId) 
+      ? [...this.pendingEdits.get(rowId)!]
+      : await this.getRowValues(rowId);
+
+    const oldValues = [...currentValues];
+    currentValues[colIndex] = newValue;
+    
+    // Store the edit
+    this.pendingEdits.set(rowId, currentValues);
+    
+    // Record history for undo/redo
+    this.editHistory.push({ rowId, oldValues, newValues: currentValues });
+    
+    return { oldValues, newValues: currentValues };
+  }
+
+  private async getRowValues(rowId: number): Promise<string[]> {
+    await this.startIndexing();
+    
+    const adjustedRowId = rowId + (this.hasHeaders ? 1 : 0);
+    if (adjustedRowId >= this.lineOffsets.length) {
+      throw new Error(`Row ID out of bounds: ${rowId}`);
+    }
+
+    const startByte = this.lineOffsets[adjustedRowId];
+    const endByte = adjustedRowId + 1 < this.lineOffsets.length 
+      ? this.lineOffsets[adjustedRowId + 1] 
+      : null;
+
+    const fd = await fs.promises.open(this.filePath, 'r');
+    const stats = await fd.stat();
+    const finalByte = endByte !== null ? endByte : stats.size;
+    const lengthToRead = finalByte - startByte;
+
+    const buffer = Buffer.alloc(lengthToRead);
+    await fd.read(buffer, 0, lengthToRead, startByte);
+    await fd.close();
+
+    const decoder = new TextDecoder(this.encoding, { fatal: false });
+    const text = decoder.decode(buffer);
+    const line = text.split(/\r?\n/)[0];
+    
+    return parseCsvLine(line, this.delimiter);
+  }
+
+  public hasPendingEdits(): boolean {
+    return this.pendingEdits.size > 0;
+  }
+
+  public clearEdits(): void {
+    this.pendingEdits.clear();
+    this.editHistory = [];
+  }
+
+  public async saveEdits(): Promise<void> {
+    if (this.pendingEdits.size === 0) {
+      return;
+    }
+
+    // Create a temporary file and write all lines with edits
+    const tempPath = this.filePath + '.tmp';
+    const input = fs.createReadStream(this.filePath);
+    const output = fs.createWriteStream(tempPath);
+    const decoder = new TextDecoder(this.encoding, { fatal: false });
+    
+    let lineNumber = -1;
+    let buffer = '';
+    
+    return new Promise((resolve, reject) => {
+      input.on('data', (chunk) => {
+        if (typeof chunk === 'string') {
+          buffer += chunk;
+        } else {
+          const uint8Array = chunk instanceof Buffer ? new Uint8Array(chunk) : chunk;
+          buffer += decoder.decode(uint8Array, { stream: true });
+        }
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          lineNumber++;
+          const isHeader = lineNumber === 0 && this.hasHeaders;
+          
+          if (isHeader) {
+            output.write(line + '\n');
+          } else {
+            const rowId = lineNumber - (this.hasHeaders ? 1 : 0);
+            if (this.pendingEdits.has(rowId)) {
+              const editedRow = this.pendingEdits.get(rowId)!;
+              output.write(editedRow.join(this.delimiter) + '\n');
+            } else {
+              output.write(line + '\n');
+            }
+          }
+        }
+      });
+
+      input.on('end', () => {
+        if (buffer) {
+          lineNumber++;
+          const rowId = lineNumber - (this.hasHeaders ? 1 : 0);
+          if (this.pendingEdits.has(rowId)) {
+            const editedRow = this.pendingEdits.get(rowId)!;
+            output.write(editedRow.join(this.delimiter));
+          } else {
+            output.write(buffer);
+          }
+        }
+        output.end();
+      });
+
+      output.on('finish', async () => {
+        await fs.promises.unlink(this.filePath);
+        await fs.promises.rename(tempPath, this.filePath);
+        this.pendingEdits.clear();
+        this.editHistory = [];
+        resolve();
+      });
+
+      input.on('error', reject);
+      output.on('error', reject);
+    });
+  }
+
+  public async saveEditsAs(destinationPath: string): Promise<void> {
+    // Similar to saveEdits but writes to a different location
+    const input = fs.createReadStream(this.filePath);
+    const output = fs.createWriteStream(destinationPath);
+    const decoder = new TextDecoder(this.encoding, { fatal: false });
+    
+    let lineNumber = -1;
+    let buffer = '';
+    
+    return new Promise((resolve, reject) => {
+      input.on('data', (chunk) => {
+        if (typeof chunk === 'string') {
+          buffer += chunk;
+        } else {
+          const uint8Array = chunk instanceof Buffer ? new Uint8Array(chunk) : chunk;
+          buffer += decoder.decode(uint8Array, { stream: true });
+        }
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || '';
+        
+        for (const line of lines) {
+          lineNumber++;
+          const isHeader = lineNumber === 0 && this.hasHeaders;
+          
+          if (isHeader) {
+            output.write(line + '\n');
+          } else {
+            const rowId = lineNumber - (this.hasHeaders ? 1 : 0);
+            if (this.pendingEdits.has(rowId)) {
+              const editedRow = this.pendingEdits.get(rowId)!;
+              output.write(editedRow.join(this.delimiter) + '\n');
+            } else {
+              output.write(line + '\n');
+            }
+          }
+        }
+      });
+
+      input.on('end', () => {
+        if (buffer) {
+          lineNumber++;
+          const rowId = lineNumber - (this.hasHeaders ? 1 : 0);
+          if (this.pendingEdits.has(rowId)) {
+            const editedRow = this.pendingEdits.get(rowId)!;
+            output.write(editedRow.join(this.delimiter));
+          } else {
+            output.write(buffer);
+          }
+        }
+        output.end();
+      });
+
+      output.on('finish', resolve);
+      output.on('error', reject);
+      input.on('error', reject);
+    });
+  }
+
+  public async createBackup(backupPath: string): Promise<string> {
+    const backupFile = backupPath + '.backup';
+    await this.saveEditsAs(backupFile);
+    return backupFile;
+  }
+
+  public undo(): { rowId: number, oldValues: string[], newValues: string[] } | null {
+    if (this.editHistory.length === 0) {
+      return null;
+    }
+    
+    const lastEdit = this.editHistory.pop()!;
+    this.pendingEdits.set(lastEdit.rowId, lastEdit.oldValues);
+    
+    return lastEdit;
+  }
+
+  public redo(): { rowId: number, oldValues: string[], newValues: string[] } | null {
+    // For simplicity, we'll just return null for now
+    // In a full implementation, we'd maintain separate redo history
+    return null;
   }
 }

@@ -112,22 +112,22 @@ async function runTest() {
   const pageMiddle = await engine.readPage(500000, 5);
   const readEnd = performance.now();
   console.log(`Read page took ${(readEnd - readStart).toFixed(2)}ms:`);
-  console.log(pageMiddle.map(r => r.slice(0, 5).join(',') + `, ... (+115 cols)`));
+  console.log(pageMiddle.map(r => r.values.slice(0, 5).join(',') + `, ... (+115 cols)`));
 
   console.log('\n--- Searching for "TargetRow" (near the end of file, row 999,999) ---');
   const searchStart = performance.now();
   const searchResult = await engine.search('TargetRow', 5);
   const searchEnd = performance.now();
   console.log(`Search took ${(searchEnd - searchStart).toFixed(2)}ms:`);
-  console.log('Search Result rows (first 3 columns shown):', searchResult.rows.map(r => r.slice(0, 3).join(',') + ` ... col60: ${r[60]} ...`));
+  console.log('Search Result rows (first 3 columns shown):', searchResult.rows.map(r => r.values.slice(0, 3).join(',') + ` ... col60: ${r.values[60]} ...`));
 
   console.log('\n--- Searching for Thai "สวัสดี" ---');
   const thaiSearch = await engine.search('สวัสดี', 5);
-  console.log('Thai search result rows (first 5 columns):', thaiSearch.rows.map(r => r.slice(0, 5)));
+  console.log('Thai search result rows (first 5 columns):', thaiSearch.rows.map(r => r.values.slice(0, 5)));
 
   console.log('\n--- Searching for emoji "🚀" ---');
   const emojiSearch = await engine.search('🚀', 5);
-  console.log('Emoji search result rows (first 5 columns):', emojiSearch.rows.map(r => r.slice(0, 5)));
+  console.log('Emoji search result rows (first 5 columns):', emojiSearch.rows.map(r => r.values.slice(0, 5)));
 
   // Clean up
   fs.unlinkSync(testFile);

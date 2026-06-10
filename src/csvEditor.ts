@@ -16,7 +16,7 @@ class CsvDocument implements vscode.CustomDocument {
   }
 }
 
-export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<CsvDocument> {
+export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocument> {
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
     const provider = new CsvEditorProvider(context);
     return vscode.window.registerCustomEditorProvider(CsvEditorProvider.viewType, provider, {
@@ -27,8 +27,13 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
   }
 
   private static readonly viewType = 'bigTable.csvViewer';
+  private readonly activePanels = new Map<CsvDocument, vscode.WebviewPanel>();
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  // Required for vscode.CustomEditorProvider
+  private readonly _onDidChangeCustomDocument = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<CsvDocument>>();
+  public readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
 
   public async openCustomDocument(
     uri: vscode.Uri,
@@ -43,6 +48,11 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     webviewPanel: vscode.WebviewPanel,
     token: vscode.CancellationToken
   ): Promise<void> {
+    this.activePanels.set(document, webviewPanel);
+    webviewPanel.onDidDispose(() => {
+      this.activePanels.delete(document);
+    });
+
     webviewPanel.webview.options = {
       enableScripts: true,
     };
@@ -71,6 +81,14 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     webviewPanel.webview.onDidReceiveMessage(async (message) => {
       try {
         switch (message.type) {
+          case 'triggerSave':
+            vscode.commands.executeCommand('workbench.action.files.save');
+            break;
+
+          case 'triggerUndo':
+            vscode.commands.executeCommand('undo');
+            break;
+
           case 'ready':
             await document.engine.startIndexing();
             const firstPage = await document.engine.readPage(0, message.pageSize || 100);
@@ -123,6 +141,47 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
                 rows: searchResults.rows
               });
             }
+            break;
+
+          case 'edit':
+            // Apply the edit and notify VS Code about the change
+            const editResult = await document.engine.editCell(message.rowId, message.colIndex, message.value);
+            
+            // Fire the custom document change event to notify VS Code
+            this._onDidChangeCustomDocument.fire({
+              document: document,
+              undo: async () => {
+                const undoneEdit = document.engine.undo();
+                if (undoneEdit) {
+                  let changedColIndex = -1;
+                  for (let i = 0; i < undoneEdit.oldValues.length; i++) {
+                    if (undoneEdit.oldValues[i] !== undoneEdit.newValues[i]) {
+                      changedColIndex = i;
+                      break;
+                    }
+                  }
+                  if (changedColIndex !== -1) {
+                    webviewPanel.webview.postMessage({
+                      type: 'undone',
+                      rowId: undoneEdit.rowId,
+                      colIndex: changedColIndex,
+                      value: undoneEdit.oldValues[changedColIndex]
+                    });
+                  }
+                }
+              },
+              redo: async () => {
+                document.engine.redo();
+              }
+            });
+
+            // Notify webview about the edit
+            webviewPanel.webview.postMessage({
+              type: 'editApplied',
+              rowId: message.rowId,
+              colIndex: message.colIndex,
+              value: message.value
+            });
             break;
 
           case 'filter':
@@ -662,6 +721,14 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         <input type="checkbox" id="rainbow-checkbox" onchange="toggleRainbow()" />
         <span>Rainbow Columns</span>
       </label>
+      <label class="rainbow-toggle" title="Toggle cell editing mode">
+        <input type="checkbox" id="edit-mode-checkbox" onchange="toggleEditMode()" />
+        <span>✏️ Edit Mode</span>
+      </label>
+      <div id="edit-buttons-container" style="display: none; gap: 6px; align-items: center;">
+        <button class="btn" id="btn-save" onclick="triggerSave()" title="Save Changes (Ctrl+S / Cmd+S)" style="padding: 4px 8px; font-size: 11px;" disabled>💾 Save</button>
+        <button class="btn btn-secondary" id="btn-undo" onclick="triggerUndo()" title="Undo (Ctrl+Z / Cmd+Z)" style="padding: 4px 8px; font-size: 11px;" disabled>↩️ Undo</button>
+      </div>
       <select id="encoding-select" class="page-size-select" onchange="changeEncoding()" title="Change File Encoding">
         <option value="utf-8" selected>UTF-8</option>
         <option value="windows-874">Windows-874 (Thai)</option>
@@ -749,6 +816,9 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     // Column visibility State
     let hiddenCols = new Set();
     let showExcelHeaders = false;
+
+    // Edit mode State
+    let editModeEnabled = false;
 
     // DOM Elements
     const tableContainer = document.getElementById('table-container');
@@ -839,6 +909,50 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
           hideLoading();
           loadMoreContainer.classList.add('hidden');
           break;
+        
+        case 'editApplied':
+          // Update the loadedRows array with the new value
+          if (message.rowId >= 0 && message.colIndex >= 0) {
+            // Find the row in loadedRows and update it
+            const rowIndex = loadedRows.findIndex(row => {
+              // Assuming rows now have id property
+              return row.id === message.rowId;
+            });
+            
+            if (rowIndex !== -1) {
+              loadedRows[rowIndex].values[message.colIndex] = message.value;
+              // Re-render just the affected cell for better performance
+              updateCellInTable(message.rowId, message.colIndex, message.value);
+            }
+          }
+          break;
+
+        case 'saved':
+          editedCells.clear();
+          updateEditButtons();
+          clearAllDirtyIndicators();
+          break;
+
+        case 'reverted':
+          editedCells.clear();
+          updateEditButtons();
+          clearAllDirtyIndicators();
+          vscode.postMessage({ type: 'ready', pageSize: pageSize });
+          break;
+
+        case 'undone': {
+          const cellKey = message.rowId + '_' + message.colIndex;
+          editedCells.delete(cellKey);
+          
+          const rIdx = loadedRows.findIndex(row => row.id === message.rowId);
+          if (rIdx !== -1) {
+            loadedRows[rIdx].values[message.colIndex] = message.value;
+          }
+          
+          revertCellInTable(message.rowId, message.colIndex, message.value);
+          updateEditButtons();
+          break;
+        }
       }
     });
 
@@ -954,7 +1068,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
         for (let c = 0; c < headers.length; c++) {
           if (hiddenCols.has(c)) continue;
 
-          let val = row[c] !== undefined ? row[c] : '';
+          let val = row.values && row.values[c] !== undefined ? row.values[c] : '';
           let escVal = escapeHtml(val);
           
           if (regex && escVal) {
@@ -963,7 +1077,7 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
           
           rowHtml += \`<td class="rainbow-cell-\${c % 10}" title="\${escapeHtml(val)}">\${escVal}</td>\`;
         }
-        html += \`<tr>\${rowHtml}</tr>\`;
+        html += \`<tr data-row-id="\${row.id}">\${rowHtml}</tr>\`;
       }
 
       if (loadedRows.length === 0) {
@@ -971,6 +1085,30 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
       }
 
       tableBody.innerHTML = html;
+      initializeEditMode();
+    }
+
+    function updateCellInTable(rowId, colIndex, value) {
+      const tableBody = document.getElementById('table-body');
+      const row = tableBody.querySelector(\`tr[data-row-id="\${rowId}"]\`);
+      
+      if (row) {
+        // Find the cell in this row (skip row index column)
+        const cells = row.querySelectorAll('td:not(.row-index)');
+        let currentCol = 0;
+        
+        for (let j = 0; j < cells.length; j++) {
+          if (!hiddenCols.has(currentCol)) {
+            if (currentCol === colIndex) {
+              cells[j].textContent = value;
+              cells[j].style.backgroundColor = 'rgba(14, 99, 156, 0.2)';
+              cells[j].style.borderLeft = '2px solid var(--accent)';
+              break;
+            }
+          }
+          currentCol++;
+        }
+      }
     }
 
     // Sorting Logic (Client side for instant feeling)
@@ -1007,8 +1145,8 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
 
     function sortData(colIdx, dir) {
       loadedRows.sort((a, b) => {
-        const valA = a[colIdx] || '';
-        const valB = b[colIdx] || '';
+        const valA = (a.values && a.values[colIdx]) || '';
+        const valB = (b.values && b.values[colIdx]) || '';
         
         const numA = Number(valA);
         const numB = Number(valB);
@@ -1052,6 +1190,42 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     function toggleExcelHeaders() {
       showExcelHeaders = document.getElementById('excel-headers-checkbox').checked;
       renderHeaders();
+    }
+
+    function toggleEditMode() {
+      editModeEnabled = document.getElementById('edit-mode-checkbox').checked;
+      
+      // Update visual feedback
+      const tableBody = document.getElementById('table-body');
+      if (tableBody) {
+        if (editModeEnabled) {
+          // Show that cells are editable
+          const cells = tableBody.querySelectorAll('td:not(.row-index)');
+          cells.forEach(cell => {
+            cell.style.cursor = 'text';
+            cell.title = 'Double-click or press Enter to edit';
+          });
+        } else {
+          // Show that cells are read-only
+          const cells = tableBody.querySelectorAll('td:not(.row-index)');
+          cells.forEach(cell => {
+            cell.style.cursor = 'default';
+            cell.title = '';
+          });
+        }
+      }
+      
+      // Show/hide Save and Undo buttons
+      const editButtonsContainer = document.getElementById('edit-buttons-container');
+      if (editButtonsContainer) {
+        editButtonsContainer.style.display = editModeEnabled ? 'inline-flex' : 'none';
+        updateEditButtons();
+      }
+      
+      // If there's an active edit, cancel it when turning off edit mode
+      if (!editModeEnabled && currentlyEditing) {
+        finishCellEdit(true); // Cancel the edit
+      }
     }
 
     function getExcelColumnLabel(index) {
@@ -1314,8 +1488,310 @@ export class CsvEditorProvider implements vscode.CustomReadonlyEditorProvider<Cs
     function formatNumber(num) {
       return num.toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, ",");
     }
+
+    // Cell editing functions
+    let editedCells = new Map(); // Map of rowId_colIndex -> {originalValue, editedValue}
+    let currentlyEditing = null; // {rowIndex, colIndex, tdElement, originalValue}
+
+    function startCellEdit(rowId, colIndex, tdElement) {
+      if (!editModeEnabled) return;
+      
+      if (currentlyEditing) {
+        finishCellEdit(true); // Cancel previous edit
+      }
+
+      const originalValue = tdElement.textContent;
+      
+      // Create input element
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = originalValue;
+      input.className = 'cell-edit-input';
+      input.style.width = '100%';
+      input.style.height = '100%';
+      input.style.boxSizing = 'border-box';
+      input.style.backgroundColor = 'var(--input-bg)';
+      input.style.color = 'var(--input-fg)';
+      input.style.border = '2px solid var(--accent)';
+      input.style.outline = 'none';
+      input.style.fontFamily = 'inherit';
+      input.style.fontSize = 'inherit';
+      input.style.padding = '2px 4px';
+      
+      // Save editing state
+      currentlyEditing = {
+        rowId,
+        colIndex,
+        tdElement,
+        originalValue,
+        input
+      };
+      
+      // Clear cell content and add input
+      tdElement.innerHTML = '';
+      tdElement.appendChild(input);
+      input.focus();
+      input.select();
+      
+      // Handle key events
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          finishCellEdit(false); // Save edit
+        } else if (e.key === 'Escape') {
+          finishCellEdit(true); // Cancel edit
+        }
+      });
+      
+      input.addEventListener('blur', () => {
+        setTimeout(() => {
+          if (currentlyEditing && currentlyEditing.input === input) {
+            finishCellEdit(false); // Save on blur
+          }
+        }, 100);
+      });
+    }
+
+    function finishCellEdit(cancel) {
+      if (!currentlyEditing) return;
+      
+      const { rowId, colIndex, tdElement, originalValue, input } = currentlyEditing;
+      const newValue = cancel ? originalValue : input.value.trim();
+      
+      // Restore cell content
+      tdElement.innerHTML = '';
+      tdElement.textContent = newValue;
+      
+      // Mark cell as edited if value changed
+      if (!cancel && newValue !== originalValue) {
+        const cellKey = rowId + '_' + colIndex;
+        editedCells.set(cellKey, {
+          originalValue,
+          editedValue: newValue
+        });
+        tdElement.style.backgroundColor = 'rgba(14, 99, 156, 0.2)'; // Light blue background for edited cells
+        tdElement.style.borderLeft = '2px solid var(--accent)';
+        
+        updateEditButtons();
+
+        // Send edit to extension
+        vscode.postMessage({
+          type: 'edit',
+          rowId: rowId,
+          colIndex: colIndex,
+          value: newValue
+        });
+      } else if (cancel) {
+        // If canceled, remove any existing edit marker
+        const cellKey = rowId + '_' + colIndex;
+        editedCells.delete(cellKey);
+        tdElement.style.backgroundColor = '';
+        tdElement.style.borderLeft = '';
+        updateEditButtons();
+      }
+      
+      currentlyEditing = null;
+    }
+
+    function updateEditButtons() {
+      const btnSave = document.getElementById('btn-save');
+      const btnUndo = document.getElementById('btn-undo');
+      const hasEdits = editedCells.size > 0;
+      
+      if (btnSave) {
+        btnSave.disabled = !hasEdits;
+      }
+      if (btnUndo) {
+        btnUndo.disabled = !hasEdits;
+      }
+    }
+
+    function clearAllDirtyIndicators() {
+      const tableBody = document.getElementById('table-body');
+      if (tableBody) {
+        const cells = tableBody.querySelectorAll('td:not(.row-index)');
+        cells.forEach(cell => {
+          cell.style.backgroundColor = '';
+          cell.style.borderLeft = '';
+        });
+      }
+    }
+
+    function revertCellInTable(rowId, colIndex, value) {
+      const tableBody = document.getElementById('table-body');
+      const row = tableBody.querySelector('tr[data-row-id="' + rowId + '"]');
+      if (row) {
+        const cells = row.querySelectorAll('td:not(.row-index)');
+        let currentCol = 0;
+        
+        for (let j = 0; j < cells.length; j++) {
+          if (!hiddenCols.has(currentCol)) {
+            if (currentCol === colIndex) {
+              cells[j].textContent = value;
+              cells[j].style.backgroundColor = '';
+              cells[j].style.borderLeft = '';
+              break;
+            }
+          }
+          currentCol++;
+        }
+      }
+    }
+
+    function triggerSave() {
+      vscode.postMessage({ type: 'triggerSave' });
+    }
+
+    function triggerUndo() {
+      vscode.postMessage({ type: 'triggerUndo' });
+    }
+
+    // Make table cells editable
+    function makeCellsEditable() {
+      const tableBody = document.getElementById('table-body');
+      if (!tableBody) return;
+      
+      // Store the event handlers so we can remove them later if needed
+      if (!window.bigTableEventHandlers) {
+        window.bigTableEventHandlers = {
+          dblclick: null,
+          keydown: null
+        };
+      }
+      
+      // Remove existing handlers if they exist
+      if (window.bigTableEventHandlers.dblclick) {
+        tableBody.removeEventListener('dblclick', window.bigTableEventHandlers.dblclick);
+      }
+      if (window.bigTableEventHandlers.keydown) {
+        tableBody.removeEventListener('keydown', window.bigTableEventHandlers.keydown);
+      }
+      
+      // Define new handlers
+      const dblclickHandler = (e) => {
+        if (!editModeEnabled) return;
+        
+        const td = e.target.closest('td');
+        if (!td || td.classList.contains('row-index')) return;
+        
+        // Find row index and column index
+        const tr = td.closest('tr');
+        const rowId = parseInt(tr.dataset.rowId, 10);
+        const cells = Array.from(tr.children);
+        const colIndex = cells.indexOf(td) - 1; // Subtract 1 for row index column
+        
+        if (!isNaN(rowId) && colIndex >= 0) {
+          startCellEdit(rowId, colIndex, td);
+        }
+      };
+      
+      const keydownHandler = (e) => {
+        if (!editModeEnabled) return;
+        
+        if (e.key === 'Enter' && e.target.tagName !== 'INPUT') {
+          const activeElement = document.activeElement;
+          if (activeElement.tagName === 'TD' && !activeElement.classList.contains('row-index')) {
+            const td = activeElement;
+            const tr = td.closest('tr');
+            const rowId = parseInt(tr.dataset.rowId, 10);
+            const cells = Array.from(tr.children);
+            const colIndex = cells.indexOf(td) - 1;
+            
+            if (!isNaN(rowId) && colIndex >= 0) {
+              e.preventDefault();
+              startCellEdit(rowId, colIndex, td);
+            }
+          }
+        }
+      };
+      
+      // Add event listeners
+      tableBody.addEventListener('dblclick', dblclickHandler);
+      tableBody.addEventListener('keydown', keydownHandler);
+      
+      // Store handlers for later removal
+      window.bigTableEventHandlers.dblclick = dblclickHandler;
+      window.bigTableEventHandlers.keydown = keydownHandler;
+      
+      // Add tabindex to make cells focusable
+      const cells = tableBody.querySelectorAll('td:not(.row-index)');
+      cells.forEach(cell => {
+        cell.tabIndex = 0;
+      });
+    }
+
+    // Call this after rows are rendered
+    function initializeEditMode() {
+      // Initially, edit mode is disabled by default
+      // Users need to explicitly enable it via the toggle
+      editModeEnabled = false;
+      const editModeCheckbox = document.getElementById('edit-mode-checkbox');
+      if (editModeCheckbox) {
+        editModeCheckbox.checked = false;
+      }
+      
+      // Set up the event handlers, but they will check editModeEnabled
+      makeCellsEditable();
+    }
+
+    function disableCellEditing() {
+      // Simple function that just updates visual state
+      const tableBody = document.getElementById('table-body');
+      if (tableBody) {
+        const cells = tableBody.querySelectorAll('td:not(.row-index)');
+        cells.forEach(cell => {
+          cell.style.cursor = 'default';
+          cell.title = '';
+        });
+      }
+    }
   </script>
 </body>
 </html>`;
+  }
+
+  // Required methods for vscode.CustomEditorProvider
+  public async saveCustomDocument(
+    document: CsvDocument,
+    cancellation: vscode.CancellationToken
+  ): Promise<void> {
+    await document.engine.saveEdits();
+    const panel = this.activePanels.get(document);
+    if (panel) {
+      panel.webview.postMessage({ type: 'saved' });
+    }
+  }
+
+  public async saveCustomDocumentAs(
+    document: CsvDocument,
+    destination: vscode.Uri,
+    cancellation: vscode.CancellationToken
+  ): Promise<void> {
+    await document.engine.saveEditsAs(destination.fsPath);
+  }
+
+  public async revertCustomDocument(
+    document: CsvDocument,
+    cancellation: vscode.CancellationToken
+  ): Promise<void> {
+    document.engine.clearEdits();
+    const panel = this.activePanels.get(document);
+    if (panel) {
+      panel.webview.postMessage({ type: 'reverted' });
+    }
+  }
+
+  public async backupCustomDocument(
+    document: CsvDocument,
+    context: vscode.CustomDocumentBackupContext,
+    cancellation: vscode.CancellationToken
+  ): Promise<vscode.CustomDocumentBackup> {
+    // Create a backup file with pending edits
+    const backupPath = await document.engine.createBackup(context.destination.fsPath);
+    return {
+      id: backupPath,
+      delete: () => {
+        // Delete the backup file
+      }
+    };
   }
 }
