@@ -9,3 +9,4 @@ package-lock.json
 test.csv
 out/testEngine.js
 out/testEngine.js.map
+out/test.csv
