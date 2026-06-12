@@ -2,7 +2,7 @@
   "name": "big-table-csv-viewer",
   "displayName": "BigTable CSV Viewer",
   "description": "High-performance, ultra-lightweight viewer and filter for millions of rows CSV files.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "preepramdev",
   "repository": {
     "type": "git",

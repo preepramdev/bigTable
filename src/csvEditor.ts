@@ -514,6 +514,21 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
       max-width: 400px;
       overflow: hidden;
       text-overflow: ellipsis;
+      user-select: none;
+    }
+
+    td.selected {
+      background-color: var(--vscode-editor-selectionBackground, #264f78) !important;
+      color: var(--vscode-editor-selectionForeground, inherit);
+    }
+
+    #csv-table.rainbow-enabled td.selected {
+      background-color: var(--vscode-editor-selectionBackground, #264f78) !important;
+    }
+
+    td.selection-anchor {
+      outline: 2px solid var(--vscode-editor-selectionHighlightBorder, #569cd6);
+      outline-offset: -2px;
     }
 
     tr:nth-child(even) {
@@ -1096,6 +1111,12 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
     // Edit mode State
     let editModeEnabled = false;
 
+    // Selection State
+    let selectionAnchor = null; // {row, col} - starting cell of a selection range
+    let selectionActive = null; // {row, col} - current/ending cell of a selection range
+    let isSelecting = false; // Whether user is currently dragging to select
+    let mouseDownTarget = null; // Track if mousedown started on a data cell
+
     // DOM Elements
     const tableContainer = document.getElementById('table-container');
     const tableHead = document.getElementById('table-head');
@@ -1419,6 +1440,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
 
     // Rows Rendering
     function renderRows(highlightQuery = '') {
+      clearSelection();
       let html = '';
       const escQuery = highlightQuery ? escapeRegExp(highlightQuery) : null;
       const regex = escQuery ? new RegExp(\`(\${escQuery})\`, 'gi') : null;
@@ -1438,7 +1460,7 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
             escVal = escVal.replace(regex, '<mark>$1</mark>');
           }
           
-          rowHtml += \`<td class="rainbow-cell-\${c % 10}" title="\${escapeHtml(val)}">\${escVal}</td>\`;
+          rowHtml += \`<td class="rainbow-cell-\${c % 10}" title="\${escapeHtml(val)}" data-r="\${r}" data-c="\${c}">\${escVal}</td>\`;
         }
         html += \`<tr data-row-id="\${row.id}">\${rowHtml}</tr>\`;
       }
@@ -2199,6 +2221,143 @@ export class CsvEditorProvider implements vscode.CustomEditorProvider<CsvDocumen
         });
       }
     }
+
+    // ── Cell Selection ──
+
+    function clearSelection() {
+      tableBody.querySelectorAll('td.selected').forEach(el => el.classList.remove('selected'));
+      tableBody.querySelectorAll('td.selection-anchor').forEach(el => el.classList.remove('selection-anchor'));
+      selectionAnchor = null;
+      selectionActive = null;
+    }
+
+    function getCellCoords(td) {
+      if (!td || !td.dataset) return null;
+      const r = parseInt(td.dataset.r, 10);
+      const c = parseInt(td.dataset.c, 10);
+      if (isNaN(r) || isNaN(c)) return null;
+      return { row: r, col: c };
+    }
+
+    function getTdAt(row, col) {
+      return tableBody.querySelector(\`td[data-r="\${row}"][data-c="\${col}"]\`);
+    }
+
+    function selectRange(anchor, active) {
+      tableBody.querySelectorAll('td.selected').forEach(el => el.classList.remove('selected'));
+      tableBody.querySelectorAll('td.selection-anchor').forEach(el => el.classList.remove('selection-anchor'));
+
+      if (!anchor || !active) return;
+
+      const minRow = Math.min(anchor.row, active.row);
+      const maxRow = Math.max(anchor.row, active.row);
+      const minCol = Math.min(anchor.col, active.col);
+      const maxCol = Math.max(anchor.col, active.col);
+
+      const cells = tableBody.querySelectorAll('td[data-r]');
+      for (const cell of cells) {
+        if (cell.classList.contains('row-index')) continue;
+        const r = parseInt(cell.dataset.r, 10);
+        const c = parseInt(cell.dataset.c, 10);
+        if (hiddenCols.has(c)) continue;
+        if (r >= minRow && r <= maxRow && c >= minCol && c <= maxCol) {
+          cell.classList.add('selected');
+        }
+      }
+
+      // Mark the anchor cell
+      const anchorCell = getTdAt(anchor.row, anchor.col);
+      if (anchorCell) anchorCell.classList.add('selection-anchor');
+    }
+
+    // Mouse events for cell selection
+    tableBody.addEventListener('mousedown', (e) => {
+      const td = e.target.closest('td');
+      if (!td || td.classList.contains('row-index')) return;
+
+      // Don't select if in edit mode and clicking on an input
+      if (e.target.tagName === 'INPUT') return;
+
+      const coords = getCellCoords(td);
+      if (!coords) return;
+
+      mouseDownTarget = td;
+
+      if (e.shiftKey && selectionAnchor) {
+        // Shift-click extends the range
+        selectionActive = coords;
+        selectRange(selectionAnchor, selectionActive);
+        return;
+      }
+
+      // Start new selection
+      clearSelection();
+      selectionAnchor = coords;
+      selectionActive = coords;
+      isSelecting = true;
+      td.classList.add('selected');
+      td.classList.add('selection-anchor');
+    });
+
+    tableBody.addEventListener('mousemove', (e) => {
+      if (!isSelecting) return;
+      const td = e.target.closest('td');
+      if (!td || td.classList.contains('row-index')) return;
+      if (td === mouseDownTarget) return;
+
+      const coords = getCellCoords(td);
+      if (!coords) return;
+
+      selectionActive = coords;
+      selectRange(selectionAnchor, selectionActive);
+      mouseDownTarget = td;
+    });
+
+    document.addEventListener('mouseup', () => {
+      isSelecting = false;
+    });
+
+    // Copy handler
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+        if (!selectionAnchor || !selectionActive) return;
+
+        const minRow = Math.min(selectionAnchor.row, selectionActive.row);
+        const maxRow = Math.max(selectionAnchor.row, selectionActive.row);
+        const minCol = Math.min(selectionAnchor.col, selectionActive.col);
+        const maxCol = Math.max(selectionAnchor.col, selectionActive.col);
+
+        const rows = [];
+        for (let r = minRow; r <= maxRow; r++) {
+          const rowData = [];
+          for (let c = minCol; c <= maxCol; c++) {
+            if (hiddenCols.has(c)) continue;
+            const cell = getTdAt(r, c);
+            rowData.push(cell ? cell.textContent : '');
+          }
+          rows.push(rowData.join('\\t'));
+        }
+        const text = rows.join('\\n');
+
+        navigator.clipboard.writeText(text).catch(() => {
+          // Fallback for older browsers
+          const textarea = document.createElement('textarea');
+          textarea.value = text;
+          textarea.style.position = 'fixed';
+          textarea.style.left = '-9999px';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        });
+      }
+    });
+
+    // Clicking outside clears selection (but not on header clicks)
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('td') || e.target.closest('th') || e.target.closest('.toolbar') || e.target.closest('.filter-panel') || e.target.closest('.column-panel') || e.target.closest('.context-menu')) return;
+      clearSelection();
+    });
   </script>
 </body>
 </html>`;
